@@ -4,14 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>アグリ防除ログ Pro</title>
-    <!-- Tailwind CSS (CDN) -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- React & ReactDOM (CDN) -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <!-- Framer Motion (CDN) -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://unpkg.com/framer-motion@10.16.4/dist/framer-motion.js"></script>
-    <!-- Lucide Icons (CDN) -->
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
@@ -23,46 +20,30 @@
     <div id="root"></div>
 
     <script type="text/babel">
-        // Note: Babel is needed for JSX in browser (CDN version)
-    </script>
-    <!-- Babel (CDN) -->
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+        // 1. 設定項目
+        const API_URL = "https://script.google.com/macros/s/AKfycby94Me4iydVl4-Z-WftRCWTdPuWiYnafBT_UnKLKt_3/exec";
 
-    <script type="text/babel">
-        /**
-         * Google Apps ScriptのURLを以下に貼り付けてください。
-         * 例: const API_URL = "https://script.google.com/macros/s/.../exec";
-         */
-        const API_URL = "https://script.google.com/macros/s/AKfycby94Me4iydVl4-Z-WftRCWTdPuWiYnafBT_UnKLKt_3/dev";
-
-// エラーが起きたら画面に文字を出す魔法のコード
-window.onerror = function(msg, url, line) {
-  document.body.innerHTML = `<div style="color:red; padding:20px;">
-    <h3>エラーが発生しました</h3>
-    <p>${msg}</p>
-    <p>場所: ${line}行目</p>
-  </div>`;
-};
-        
+        // 2. 部品の安全な取得
         const { useState, useEffect, useMemo, useCallback, useRef } = React;
-        const { motion, AnimatePresence } = FramerMotion;
+        
+        // FramerMotionが読み込まれるまで待つための安全策
+        const motion = window.FramerMotion ? window.FramerMotion.motion : ({ children, ...props }) => <div {...props}>{children}</div>;
+        const AnimatePresence = window.FramerMotion ? window.FramerMotion.AnimatePresence : ({ children }) => <>{children}</>;
 
         const GREENHOUSES = [
             ...Array.from({ length: 12 }, (_, i) => `${i + 1}棟`),
             ...Array.from({ length: 3 }, (_, i) => `M${i + 1}棟`)
         ];
 
-        // --- Icon Component Wrapper ---
+        // --- Icon Component ---
         const Icon = ({ name, size = 24, className = "", strokeWidth = 2 }) => {
             const iconRef = useRef(null);
             useEffect(() => {
-                if (iconRef.current) {
-                    lucide.createIcons({
+                if (iconRef.current && window.lucide) {
+                    window.lucide.createIcons({
                         attrs: {
                             stroke: "currentColor",
                             "stroke-width": strokeWidth,
-                            "stroke-linecap": "round",
-                            "stroke-linejoin": "round",
                             width: size,
                             height: size,
                         },
@@ -88,16 +69,17 @@ window.onerror = function(msg, url, line) {
             // --- Synchronization ---
             const syncToCloud = useCallback(async (data) => {
                 if (!syncUrl || isSyncing || skipSyncRef.current) return;
+                if (syncUrl.endsWith('/dev')) return; // devモードはスキップ
                 setIsSyncing(true);
                 try {
                     await fetch(syncUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify(data) });
                     setLastSyncTime(Date.now());
-                } catch (err) { console.error(err); }
+                } catch (err) { console.error("Sync Error:", err); }
                 finally { setIsSyncing(false); }
             }, [syncUrl, isSyncing]);
 
             const pullFromCloud = useCallback(async () => {
-                if (!syncUrl || isSyncing) return;
+                if (!syncUrl || isSyncing || syncUrl.endsWith('/dev')) return;
                 setIsSyncing(true);
                 try {
                     const resp = await fetch(syncUrl);
@@ -109,11 +91,10 @@ window.onerror = function(msg, url, line) {
                         setLastSyncTime(Date.now());
                         setTimeout(() => { skipSyncRef.current = false; }, 1000);
                     }
-                } catch (err) { console.error(err); }
+                } catch (err) { console.error("Pull Error:", err); }
                 finally { setIsSyncing(false); }
             }, [syncUrl, isSyncing]);
 
-            // --- Init ---
             useEffect(() => {
                 const savedNotes = localStorage.getItem('agri_notes_v2');
                 const savedHouses = localStorage.getItem('agri_houses_v1');
@@ -123,7 +104,7 @@ window.onerror = function(msg, url, line) {
                     const initial = {}; GREENHOUSES.forEach(h => initial[h] = '収穫中');
                     setHouseConfigs(initial);
                 }
-                if (syncUrl) pullFromCloud();
+                if (syncUrl && !syncUrl.endsWith('/dev')) pullFromCloud();
             }, []);
 
             const saveNotes = (updated) => {
@@ -134,19 +115,25 @@ window.onerror = function(msg, url, line) {
 
             const handleAddNote = () => {
                 const now = new Date();
-                const newNote = { id: typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : Math.random().toString(36).substring(2), title: `${now.getMonth()+1}月の作業`, content: '', updatedAt: Date.now() };
+                const newNote = { 
+                    id: Math.random().toString(36).substring(2), 
+                    title: `${now.getMonth()+1}月の作業`, 
+                    content: '', 
+                    updatedAt: Date.now() 
+                };
                 saveNotes([newNote, ...notes]);
                 setActiveNoteId(newNote.id);
                 setIsListView(false);
             };
 
             const deleteNote = (id) => {
+                if(!confirm('このメモを削除しますか？')) return;
                 const updated = notes.filter(n => n.id !== id);
                 saveNotes(updated);
-                if (activeNoteId === id) { setActiveNoteId(null); setIsListView(true); }
+                setActiveNoteId(null);
+                setIsListView(true);
             };
 
-            // --- Aggregator & Logic ---
             const aggregatedData = useMemo(() => {
                 const rawSpray = []; const rawPlanting = []; const rawReplant = [];
                 const now = new Date(); const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -180,14 +167,12 @@ window.onerror = function(msg, url, line) {
                 const resets = {};
                 [...rawReplant, ...rawPlanting].forEach(r => { if (!resets[r.section] || r.date > resets[r.section]) resets[r.section] = r.date; });
 
-                const latest = {}; const plantLatest = {};
+                const latest = {};
                 rawSpray.filter(r => !resets[r.section] || r.date >= resets[r.section]).forEach(r => { if (!latest[r.section] || r.date > latest[r.section].date) latest[r.section] = r; });
-                rawPlanting.filter(r => !resets[r.section] || r.date >= resets[r.section]).forEach(r => { if (!plantLatest[r.section] || r.date > plantLatest[r.section].date) plantLatest[r.section] = r; });
 
                 return GREENHOUSES.map(h => ({
                     section: h,
                     lastRecord: latest[h],
-                    plantingRecord: plantLatest[h],
                     houseStatus: houseConfigs[h] || '収穫中'
                 })).sort((a,b) => (b.lastRecord?.daysPassed ?? -1) - (a.lastRecord?.daysPassed ?? -1));
             }, [notes, houseConfigs]);
@@ -205,50 +190,41 @@ window.onerror = function(msg, url, line) {
             const activeNote = notes.find(n => n.id === activeNoteId);
 
             return (
-                <div class="min-h-screen pb-24">
-                    {/* Navigation */}
-                    <nav class="fixed bottom-0 w-full bg-white/80 backdrop-blur-xl border-t border-[#D2D2D7] z-50 px-6 py-2 pb-safe flex justify-around items-center h-20">
-                        <button onClick={() => {setActiveTab('notes'); setIsListView(true);}} class={`flex flex-col items-center gap-1 ${activeTab === 'notes' ? 'text-orange-500' : 'text-[#86868B]'}`}>
+                <div className="min-h-screen pb-24">
+                    <nav className="fixed bottom-0 w-full bg-white/80 backdrop-blur-xl border-t border-[#D2D2D7] z-50 px-6 py-2 pb-safe flex justify-around items-center h-20">
+                        <button onClick={() => {setActiveTab('notes'); setIsListView(true);}} className={`flex flex-col items-center gap-1 ${activeTab === 'notes' ? 'text-orange-500' : 'text-[#86868B]'}`}>
                             <Icon name="clipboard-list" strokeWidth={activeTab === 'notes' ? 3 : 2} />
-                            <span class="text-[10px] font-bold">メモ</span>
+                            <span className="text-[10px] font-bold">メモ</span>
                         </button>
-                        <button onClick={() => setActiveTab('houses')} class={`flex flex-col items-center gap-1 ${activeTab === 'houses' ? 'text-orange-500' : 'text-[#86868B]'}`}>
+                        <button onClick={() => setActiveTab('houses')} className={`flex flex-col items-center gap-1 ${activeTab === 'houses' ? 'text-orange-500' : 'text-[#86868B]'}`}>
                             <Icon name="home" strokeWidth={activeTab === 'houses' ? 3 : 2} />
-                            <span class="text-[10px] font-bold">ハウス</span>
+                            <span className="text-[10px] font-bold">ハウス</span>
                         </button>
-                        <button onClick={() => setActiveTab('status')} class={`flex flex-col items-center gap-1 ${activeTab === 'status' ? 'text-orange-500' : 'text-[#86868B]'}`}>
+                        <button onClick={() => setActiveTab('status')} className={`flex flex-col items-center gap-1 ${activeTab === 'status' ? 'text-orange-500' : 'text-[#86868B]'}`}>
                             <Icon name="history" strokeWidth={activeTab === 'status' ? 3 : 2} />
-                            <span class="text-[10px] font-bold">状況</span>
+                            <span className="text-[10px] font-bold">状況</span>
                         </button>
                     </nav>
 
-                    <div class="max-w-2xl mx-auto p-6 pt-12">
+                    <div className="max-w-2xl mx-auto p-6 pt-12">
                         {activeTab === 'notes' ? (
                             isListView ? (
-                                <div class="space-y-8">
-                                    <div class="flex justify-between items-end">
-                                        <div>
-                                            <h1 class="text-3xl font-bold">メモ</h1>
-                                            <div class="text-[10px] font-bold mt-1">
-                                                {syncUrl ? 
-                                                    <button onClick={pullFromCloud} class="text-blue-500 flex items-center gap-1"><Icon name="cloud-download" size={14} />同期中</button> :
-                                                    <button onClick={() => setShowSyncModal(true)} class="text-orange-500 flex items-center gap-1"><Icon name="cloud-off" size={14} />未設定</button>
-                                                }
-                                            </div>
-                                        </div>
-                                        <div class="flex gap-2">
-                                            <button onClick={() => setShowSyncModal(true)} class="w-10 h-10 bg-white shadow-sm border rounded-full flex items-center justify-center text-[#86868B]"><Icon name="link" size={18} /></button>
-                                            <button onClick={handleAddNote} class="w-10 h-10 bg-white shadow-sm border rounded-full flex items-center justify-center text-orange-500"><Icon name="plus" size={24} /></button>
+                                <div className="space-y-8">
+                                    <div className="flex justify-between items-end">
+                                        <h1 className="text-3xl font-bold">メモ</h1>
+                                        <div className="flex gap-2">
+                                            <button onClick={() => setShowSyncModal(true)} className="w-10 h-10 bg-white shadow-sm border rounded-full flex items-center justify-center text-[#86868B]"><Icon name="link" size={18} /></button>
+                                            <button onClick={handleAddNote} className="w-10 h-10 bg-white shadow-sm border rounded-full flex items-center justify-center text-orange-500"><Icon name="plus" size={24} /></button>
                                         </div>
                                     </div>
                                     {notesByMonth.map(([month, mNotes]) => (
-                                        <div key={month} class="space-y-3">
-                                            <h2 class="text-xl font-bold">{month}</h2>
-                                            <div class="bg-white rounded-3xl overflow-hidden shadow-sm border border-black/[0.03]">
-                                                {mNotes.map((n, i) => (
-                                                    <div key={n.id} onClick={() => { setActiveNoteId(n.id); setIsListView(false); }} class="p-4 active:bg-[#F5F5F7] border-b last:border-0 border-[#F5F5F7]">
-                                                        <h3 class="font-bold truncate">{n.title || '無題'}</h3>
-                                                        <p class="text-xs text-[#86868B] truncate">{new Date(n.updatedAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})} - {n.content.split('\n')[0]}</p>
+                                        <div key={month} className="space-y-3">
+                                            <h2 className="text-xl font-bold">{month}</h2>
+                                            <div className="bg-white rounded-3xl overflow-hidden shadow-sm border border-black/[0.03]">
+                                                {mNotes.map((n) => (
+                                                    <div key={n.id} onClick={() => { setActiveNoteId(n.id); setIsListView(false); }} className="p-4 active:bg-[#F5F5F7] border-b last:border-0 border-[#F5F5F7]">
+                                                        <h3 className="font-bold truncate">{n.title || '無題'}</h3>
+                                                        <p className="text-xs text-[#86868B] truncate">{new Date(n.updatedAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})} - {n.content.split('\n')[0]}</p>
                                                     </div>
                                                 ))}
                                             </div>
@@ -256,71 +232,62 @@ window.onerror = function(msg, url, line) {
                                     ))}
                                 </div>
                             ) : (
-                                <div class="flex flex-col h-screen fixed inset-0 bg-white z-[60]">
-                                    <div class="px-6 py-4 flex justify-between items-center bg-[#F5F5F7]">
-                                        <button onClick={() => setIsListView(true)} class="text-orange-500 font-bold flex items-center"><Icon name="chevron-left" />戻る</button>
-                                        <div class="flex gap-4">
-                                            <button onClick={() => {navigator.clipboard.writeText(activeNote.content)}} class="text-orange-500"><Icon name="copy" size={20} /></button>
-                                            <button onClick={() => deleteNote(activeNote.id)} class="text-red-500"><Icon name="trash-2" size={20} /></button>
+                                <div className="flex flex-col h-screen fixed inset-0 bg-white z-[60]">
+                                    <div className="px-6 py-4 flex justify-between items-center bg-[#F5F5F7]">
+                                        <button onClick={() => setIsListView(true)} className="text-orange-500 font-bold flex items-center"><Icon name="chevron-left" />戻る</button>
+                                        <div className="flex gap-4">
+                                            <button onClick={() => deleteNote(activeNote.id)} className="text-red-500"><Icon name="trash-2" size={20} /></button>
                                         </div>
                                     </div>
                                     <textarea 
-                                        class="flex-1 p-6 text-lg outline-none resize-none" 
+                                        className="flex-1 p-6 text-lg outline-none resize-none" 
                                         value={activeNote?.content || ''}
                                         onChange={(e) => {
                                             const updated = notes.map(n => n.id === activeNoteId ? {...n, content: e.target.value, updatedAt: Date.now()} : n);
                                             saveNotes(updated);
                                         }}
-                                        placeholder="記録を入力..."
+                                        placeholder="記録を入力... (例: 4/19 1棟 アフェット)"
                                     />
                                 </div>
                             )
                         ) : activeTab === 'houses' ? (
-                            <div class="space-y-6">
-                                <h1 class="text-3xl font-bold">ハウス設定</h1>
-                                {['明野 (1-12棟)', '松岡 (M1-M3棟)'].map((group, gi) => (
-                                    <div key={group} class="space-y-3">
-                                        <h2 class="text-xs font-bold text-[#86868B] uppercase tracking-widest">{group}</h2>
-                                        <div class="space-y-2">
-                                            {GREENHOUSES.filter(h => (gi === 0 ? !h.startsWith('M') : h.startsWith('M'))).map(house => (
-                                                <div key={house} class="bg-white p-4 rounded-2xl flex justify-between items-center shadow-sm">
-                                                    <span class="font-bold">{house}</span>
-                                                    <div class="bg-[#F5F5F7] p-1 rounded-xl flex">
-                                                        {['収穫中', '苗', '植え替え'].map(s => (
-                                                            <button 
-                                                                key={s} 
-                                                                onClick={() => {
-                                                                    const updated = {...houseConfigs, [house]: s};
-                                                                    setHouseConfigs(updated);
-                                                                    localStorage.setItem('agri_houses_v1', JSON.stringify(updated));
-                                                                }}
-                                                                class={`px-3 py-1 text-[10px] font-bold rounded-lg ${houseConfigs[house] === s ? 'bg-white shadow text-black' : 'text-[#86868B]'}`}
-                                                            >{s}</button>
-                                                        ))}
-                                                    </div>
-                                                </div>
+                            <div className="space-y-6">
+                                <h1 className="text-3xl font-bold">ハウス設定</h1>
+                                {GREENHOUSES.map(house => (
+                                    <div key={house} className="bg-white p-4 rounded-2xl flex justify-between items-center shadow-sm">
+                                        <span className="font-bold">{house}</span>
+                                        <div className="bg-[#F5F5F7] p-1 rounded-xl flex gap-1">
+                                            {['収穫中', '苗', '植え替え'].map(s => (
+                                                <button 
+                                                    key={s} 
+                                                    onClick={() => {
+                                                        const updated = {...houseConfigs, [house]: s};
+                                                        setHouseConfigs(updated);
+                                                        localStorage.setItem('agri_houses_v1', JSON.stringify(updated));
+                                                    }}
+                                                    className={`px-3 py-1 text-[10px] font-bold rounded-lg ${houseConfigs[house] === s ? 'bg-white shadow text-black' : 'text-[#86868B]'}`}
+                                                >{s}</button>
                                             ))}
                                         </div>
                                     </div>
                                 ))}
                             </div>
                         ) : (
-                            <div class="space-y-6">
-                                <h1 class="text-3xl font-bold">防除状況</h1>
-                                <div class="grid gap-3">
+                            <div className="space-y-6">
+                                <h1 className="text-3xl font-bold">防除状況</h1>
+                                <div className="grid gap-3">
                                     {aggregatedData.map(status => (
-                                        <div key={status.section} class="bg-white p-5 rounded-3xl shadow-sm border border-black/[0.02] flex items-center">
-                                            <div class={`w-1.5 h-12 rounded-full mr-4 ${status.houseStatus === '植え替え' ? 'bg-gray-200' : (status.lastRecord?.daysPassed >= 14 ? 'bg-red-500' : 'bg-green-500')}`} />
-                                            <div class="flex-1">
-                                                <div class="flex items-center gap-2">
-                                                    <span class="font-bold text-lg">{status.section}</span>
-                                                    <span class="text-[10px] font-bold text-[#86868B]">{status.houseStatus}</span>
+                                        <div key={status.section} className="bg-white p-5 rounded-3xl shadow-sm border border-black/[0.02] flex items-center">
+                                            <div className={`w-1.5 h-12 rounded-full mr-4 ${status.houseStatus === '植え替え' ? 'bg-gray-200' : (status.lastRecord?.daysPassed >= 14 ? 'bg-red-500' : 'bg-green-500')}`} />
+                                            <div className="flex-1">
+                                                <div className="flex items-center gap-2">
+                                                    <span className="font-bold text-lg">{status.section}</span>
+                                                    <span className="text-[10px] font-bold text-[#86868B]">{status.houseStatus}</span>
                                                 </div>
-                                                <div class="text-[10px] text-[#86868B]">{status.lastRecord ? status.lastRecord.pesticide : '記録なし'}</div>
+                                                <div className="text-[10px] text-[#86868B]">{status.lastRecord ? status.lastRecord.pesticide : '記録なし'}</div>
                                             </div>
-                                            <div class="text-right">
-                                                <div class="text-2xl font-black">{status.lastRecord && status.houseStatus !== '植え替え' ? status.lastRecord.daysPassed : '--'}<span class="text-xs ml-0.5">日</span></div>
-                                                <div class="text-[8px] font-bold text-[#86868B] uppercase">経過</div>
+                                            <div className="text-right">
+                                                <div className="text-2xl font-black">{status.lastRecord && status.houseStatus !== '植え替え' ? status.lastRecord.daysPassed : '--'}<span className="text-xs ml-0.5">日</span></div>
                                             </div>
                                         </div>
                                     ))}
@@ -329,23 +296,23 @@ window.onerror = function(msg, url, line) {
                         )}
                     </div>
 
-                    {/* Sync Modal */}
                     <AnimatePresence>
                         {showSyncModal && (
-                            <div class="fixed inset-0 z-[100] bg-black/40 backdrop-blur-sm flex items-center justify-center p-6">
-                                <motion.div initial={{scale:0.9, opacity:0}} animate={{scale:1, opacity:1}} class="bg-white w-full max-w-sm p-8 rounded-[32px] shadow-2xl space-y-6">
-                                    <h2 class="font-bold text-xl">共有設定</h2>
+                            <div className="fixed inset-0 z-[100] bg-black/40 backdrop-blur-sm flex items-center justify-center p-6 text-center">
+                                <motion.div initial={{scale:0.9, opacity:0}} animate={{scale:1, opacity:1}} className="bg-white w-full max-w-sm p-8 rounded-[32px] shadow-2xl space-y-6">
+                                    <h2 className="font-bold text-xl text-center">共有設定</h2>
+                                    <p className="text-xs text-gray-500 text-center">GASのURLを貼り付けてください。末尾が /exec であることを確認してください。</p>
                                     <input 
                                         type="text" 
-                                        placeholder="GAS Web App URL..." 
-                                        class="w-full bg-[#f5f5f7] p-4 rounded-xl text-sm outline-none ring-2 ring-transparent focus:ring-orange-300" 
+                                        placeholder="https://script.google.com/macros/s/.../exec" 
+                                        className="w-full bg-[#f5f5f7] p-4 rounded-xl text-sm outline-none ring-2 ring-transparent focus:ring-orange-300" 
                                         value={syncUrl}
                                         onChange={(e) => {
                                             setSyncUrl(e.target.value);
                                             localStorage.setItem('agri_sync_url', e.target.value);
                                         }}
                                     />
-                                    <button onClick={() => {setShowSyncModal(false); if(syncUrl) pullFromCloud();}} class="w-full bg-orange-500 text-white font-bold py-4 rounded-2xl">保存して同期</button>
+                                    <button onClick={() => {setShowSyncModal(false); if(syncUrl && !syncUrl.endsWith('/dev')) pullFromCloud();}} className="w-full bg-orange-500 text-white font-bold py-4 rounded-2xl">保存して同期</button>
                                 </motion.div>
                             </div>
                         )}
