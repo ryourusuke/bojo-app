@@ -35,6 +35,15 @@
          */
         const API_URL = "https://script.google.com/macros/s/AKfycby94Me4iydVl4-Z-WftRCWTdPuWiYnafBT_UnKLKt_3/dev";
 
+// エラーが起きたら画面に文字を出す魔法のコード
+window.onerror = function(msg, url, line) {
+  document.body.innerHTML = `<div style="color:red; padding:20px;">
+    <h3>エラーが発生しました</h3>
+    <p>${msg}</p>
+    <p>場所: ${line}行目</p>
+  </div>`;
+};
+        
         const { useState, useEffect, useMemo, useCallback, useRef } = React;
         const { motion, AnimatePresence } = FramerMotion;
 
