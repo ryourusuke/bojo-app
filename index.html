@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>アグリ防除ログ Pro</title>
+    <!-- Tailwind CSS (CDN) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & ReactDOM (CDN) -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Framer Motion (CDN) -->
+    <script src="https://unpkg.com/framer-motion@10.16.4/dist/framer-motion.js"></script>
+    <!-- Lucide Icons (CDN) -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
+        body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; -webkit-tap-highlight-color: transparent; }
+        .pb-safe { padding-bottom: env(safe-area-inset-bottom); }
+    </style>
+</head>
+<body class="bg-[#F5F5F7] text-[#1D1D1F]">
+    <div id="root"></div>
+
+    <!-- Babel (CDN) -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <script type="text/babel">
+        /**
+         * 【重要】Google Apps ScriptのURLを以下に貼り付けてください。
+         * 例: const API_URL = "https://script.google.com/macros/s/xxxxxx/exec";
+         */
+        const API_URL = "https://script.google.com/macros/s/AKfycbxw6FouDrg12PFM90Yc5DOOgsoXx0Re8ZhwXKDu5eF2k1Krtr9_7KW3oOZYRUyQd5np/exec";
+
+        const { useState, useEffect, useMemo, useCallback, useRef } = React;
+        const { motion, AnimatePresence } = FramerMotion;
+
+        const GREENHOUSES = [
+            ...Array.from({ length: 12 }, (_, i) => `${i + 1}棟`),
+            ...Array.from({ length: 3 }, (_, i) => `M${i + 1}棟`)
+        ];
+
+        // --- Icon Component Wrapper ---
+        const Icon = ({ name, size = 24, className = "", strokeWidth = 2 }) => {
+            const iconRef = useRef(null);
+            useEffect(() => {
+                if (iconRef.current) {
+                    lucide.createIcons({
+                        attrs: {
+                            stroke: "currentColor",
+                            "stroke-width": strokeWidth,
+                            "stroke-linecap": "round",
+                            "stroke-linejoin": "round",
+                            width: size,
+                            height: size,
+                        },
+                        nameMap: { [name]: iconRef.current }
+                    });
+                }
+            }, [name, size, strokeWidth]);
+            return <i data-lucide={name} ref={iconRef} className={className}></i>;
+        };
+
+        function App() {
+            const [activeTab, setActiveTab] = useState('status');
+            const [notes, setNotes] = useState([]);
+            const [activeNoteId, setActiveNoteId] = useState(null);
+            const [isListView, setIsListView] = useState(true);
+            const [houseConfigs, setHouseConfigs] = useState({});
+            const [syncUrl, setSyncUrl] = useState(API_URL || localStorage.getItem('agri_sync_url') || '');
+            const [isSyncing, setIsSyncing] = useState(false);
+            const [showSyncModal, setShowSyncModal] = useState(false);
+            const [lastSyncTime, setLastSyncTime] = useState(null);
+            const skipSyncRef = useRef(false);
+
+            // --- Synchronization ---
+            const syncToCloud = useCallback(async (data) => {
+                if (!syncUrl || isSyncing || skipSyncRef.current) return;
+                setIsSyncing(true);
+                try {
+                    await fetch(syncUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify(data) });
+                    setLastSyncTime(Date.now());
+                } catch (err) { console.error(err); }
+                finally { setIsSyncing(false); }
+            }, [syncUrl, isSyncing]);
+
+            const pullFromCloud = useCallback(async () => {
+                if (!syncUrl || isSyncing) return;
+                setIsSyncing(true);
+                try {
+                    const resp = await fetch(syncUrl);
+                    const cloudNotes = await resp.json();
+                    if (Array.isArray(cloudNotes)) {
+                        skipSyncRef.current = true;
+                        setNotes(cloudNotes);
+                        localStorage.setItem('agri_notes_v2', JSON.stringify(cloudNotes));
+                        setLastSyncTime(Date.now());
+                        setTimeout(() => { skipSyncRef.current = false; }, 1000);
+                    }
+                } catch (err) { console.error(err); }
+                finally { setIsSyncing(false); }
+            }, [syncUrl, isSyncing]);
+
+            // --- Init ---
+            useEffect(() => {
+                const savedNotes = localStorage.getItem('agri_notes_v2');
+                const savedHouses = localStorage.getItem('agri_houses_v1');
+                if (savedNotes) setNotes(JSON.parse(savedNotes));
+                if (savedHouses) setHouseConfigs(JSON.parse(savedHouses));
+                else {
+                    const initial = {}; GREENHOUSES.forEach(h => initial[h] = '収穫中');
+                    setHouseConfigs(initial);
+                }
+                if (syncUrl) pullFromCloud();
+            }, []);
+
+            const saveNotes = (updated) => {
+                setNotes(updated);
+                localStorage.setItem('agri_notes_v2', JSON.stringify(updated));
+                syncToCloud(updated);
+            };
+
+            const handleAddNote = () => {
+                const now = new Date();
+                const newNote = { id: crypto.randomUUID(), title: `${now.getMonth()+1}月の作業`, content: '', updatedAt: Date.now() };
+                saveNotes([newNote, ...notes]);
+                setActiveNoteId(newNote.id);
+                setIsListView(false);
+            };
+
+            const deleteNote = (id) => {
+                const updated = notes.filter(n => n.id !== id);
+                saveNotes(updated);
+                if (activeNoteId === id) { setActiveNoteId(null); setIsListView(true); }
+            };
+
+            // --- Analysis Logic ---
+            const aggregatedData = useMemo(() => {
+                const rawSpray = []; const rawPlanting = []; const rawReplant = [];
+                const now = new Date(); const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+                notes.forEach(note => {
+                    const lines = note.content.split('\n');
+                    let mode = 'spray';
+                    lines.forEach(line => {
+                        if (line.includes('植え付け')) { mode = 'planting'; return; }
+                        if (line.includes('植え替え')) { mode = 'replant'; return; }
+                        const parts = line.split(/[,\s\-\t\u3000\uFF0D\uFF0C]+/).map(p => p.trim()).filter(Boolean);
+                        if (parts.length < 2) return;
+                        let dateStr = parts[0]; let section = parts[1].replace(/^[mｍＭ]/i, 'M');
+                        if (dateStr.includes('/') && dateStr.split('/').length === 2) {
+                            const [m, d] = dateStr.split('/').map(Number);
+                            dateStr = `${new Date(note.updatedAt).getFullYear()}/${m}/${d}`;
+                        }
+                        const date = new Date(dateStr);
+                        if (isNaN(date.getTime())) return;
+                        const norm = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+                        if (mode === 'planting') rawPlanting.push({ date: norm, section });
+                        else if (mode === 'replant') rawReplant.push({ date: norm, section });
+                        else {
+                            const pest = parts.slice(2).join(' ') || '未入力';
+                            const diff = Math.floor((today - norm) / (1000 * 60 * 60 * 24));
+                            rawSpray.push({ date: norm, section, pesticide: pest, daysPassed: diff });
+                        }
+                    });
+                });
+
+                const resets = {};
+                [...rawReplant, ...rawPlanting].forEach(r => { if (!resets[r.section] || r.date > resets[r.section]) resets[r.section] = r.date; });
+
+                const latest = {}; const plantLatest = {};
+                rawSpray.filter(r => !resets[r.section] || r.date >= resets[r.section]).forEach(r => { if (!latest[r.section] || r.date > latest[r.section].date) latest[r.section] = r; });
+                rawPlanting.filter(r => !resets[r.section] || r.date >= resets[r.section]).forEach(r => { if (!plantLatest[r.section] || r.date > plantLatest[r.section].date) plantLatest[r.section] = r; });
+
+                return GREENHOUSES.map(h => ({
+                    section: h,
+                    lastRecord: latest[h],
+                    plantingRecord: plantLatest[h],
+                    houseStatus: houseConfigs[h] || '収穫中'
+                })).sort((a,b) => (b.lastRecord?.daysPassed ?? -1) - (a.lastRecord?.daysPassed ?? -1));
+            }, [notes, houseConfigs]);
+
+            const notesByMonth = useMemo(() => {
+                const g = {};
+                notes.forEach(n => {
+                    const d = new Date(n.updatedAt);
+                    const k = `${d.getFullYear()}年 ${d.getMonth()+1}月`;
+                    if(!g[k]) g[k] = []; g[k].push(n);
+                });
+                return Object.entries(g);
+            }, [notes]);
+
+            const activeNote = notes.find(n => n.id === activeNoteId);
+
+            return (
+                <div className="min-h-screen pb-24">
+                    {/* Navigation */}
+                    <nav className="fixed bottom-0 w-full bg-white/80 backdrop-blur-xl border-t border-[#D2D2D7] z-50 px-6 py-2 pb-safe flex justify-around items-center h-20">
+                        <button onClick={() => {setActiveTab('notes'); setIsListView(true);}} className={`flex flex-col items-center gap-1 ${activeTab === 'notes' ? 'text-orange-500' : 'text-[#86868B]'}`}>
+                            <Icon name="clipboard-list" strokeWidth={activeTab === 'notes' ? 3 : 2} />
+                            <span className="text-[10px] font-bold">メモ</span>
+                        </button>
+                        <button onClick={() => setActiveTab('houses')} className={`flex flex-col items-center gap-1 ${activeTab === 'houses' ? 'text-orange-500' : 'text-[#86868B]'}`}>
+                            <Icon name="home" strokeWidth={activeTab === 'houses' ? 3 : 2} />
+                            <span className="text-[10px] font-bold">ハウス</span>
+                        </button>
+                        <button onClick={() => setActiveTab('status')} className={`flex flex-col items-center gap-1 ${activeTab === 'status' ? 'text-orange-500' : 'text-[#86868B]'}`}>
+                            <Icon name="history" strokeWidth={activeTab === 'status' ? 3 : 2} />
+                            <span className="text-[10px] font-bold">状況</span>
+                        </button>
+                    </nav>
+
+                    <div className="max-w-2xl mx-auto p-6 pt-12">
+                        {activeTab === 'notes' ? (
+                            isListView ? (
+                                <div className="space-y-8">
+                                    <div className="flex justify-between items-end">
+                                        <div>
+                                            <h1 className="text-3xl font-bold">メモ</h1>
+                                            <div className="text-[10px] font-bold mt-1">
+                                                {syncUrl ? 
+                                                    <button onClick={pullFromCloud} className="text-blue-500 flex items-center gap-1"><Icon name="cloud-download" size={14} />同期中</button> :
+                                                    <button onClick={() => setShowSyncModal(true)} className="text-orange-500 flex items-center gap-1"><Icon name="cloud-off" size={14} />未設定</button>
+                                                }
+                                            </div>
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <button onClick={() => setShowSyncModal(true)} className="w-10 h-10 bg-white shadow-sm border rounded-full flex items-center justify-center text-[#86868B]"><Icon name="link" size={18} /></button>
+                                            <button onClick={handleAddNote} className="w-10 h-10 bg-white shadow-sm border rounded-full flex items-center justify-center text-orange-500"><Icon name="plus" size={24} /></button>
+                                        </div>
+                                    </div>
+                                    {notesByMonth.map(([month, mNotes]) => (
+                                        <div key={month} className="space-y-3">
+                                            <h2 className="text-xl font-bold">{month}</h2>
+                                            <div className="bg-white rounded-3xl overflow-hidden shadow-sm border border-black/[0.03]">
+                                                {mNotes.map((n, i) => (
+                                                    <div key={n.id} onClick={() => { setActiveNoteId(n.id); setIsListView(false); }} className="p-4 active:bg-[#F5F5F7] border-b last:border-0 border-[#F5F5F7]">
+                                                        <h3 className="font-bold truncate">{n.title || '無題'}</h3>
+                                                        <p className="text-xs text-[#86868B] truncate">{new Date(n.updatedAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})} - {n.content.split('\n')[0]}</p>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="flex flex-col h-screen fixed inset-0 bg-white z-[60]">
+                                    <div className="px-6 py-4 flex justify-between items-center bg-[#F5F5F7]">
+                                        <button onClick={() => setIsListView(true)} className="text-orange-500 font-bold flex items-center"><Icon name="chevron-left" />戻る</button>
+                                        <div className="flex gap-4">
+                                            <button onClick={() => {navigator.clipboard.writeText(activeNote.content)}} className="text-orange-500"><Icon name="copy" size={20} /></button>
+                                            <button onClick={() => deleteNote(activeNote.id)} className="text-red-500"><Icon name="trash-2" size={20} /></button>
+                                        </div>
+                                    </div>
+                                    <textarea 
+                                        className="flex-1 p-6 text-lg outline-none resize-none" 
+                                        value={activeNote?.content || ''}
+                                        onChange={(e) => {
+                                            const updated = notes.map(n => n.id === activeNoteId ? {...n, content: e.target.value, updatedAt: Date.now()} : n);
+                                            saveNotes(updated);
+                                        }}
+                                        placeholder="記録を入力..."
+                                    />
+                                </div>
+                            )
+                        ) : activeTab === 'houses' ? (
+                            <div className="space-y-6">
+                                <h1 className="text-3xl font-bold">ハウス設定</h1>
+                                {['明野 (1-12棟)', '松岡 (M1-M3棟)'].map((group, gi) => (
+                                    <div key={group} className="space-y-3">
+                                        <h2 className="text-xs font-bold text-[#86868B] uppercase tracking-widest">{group}</h2>
+                                        <div className="space-y-2">
+                                            {GREENHOUSES.filter(h => (gi === 0 ? !h.startsWith('M') : h.startsWith('M'))).map(house => (
+                                                <div key={house} className="bg-white p-4 rounded-2xl flex justify-between items-center shadow-sm">
+                                                    <span className="font-bold">{house}</span>
+                                                    <div className="bg-[#F5F5F7] p-1 rounded-xl flex">
+                                                        {['収穫中', '苗', '植え替え'].map(s => (
+                                                            <button 
+                                                                key={s} 
+                                                                onClick={() => {
+                                                                    const updated = {...houseConfigs, [house]: s};
+                                                                    setHouseConfigs(updated);
+                                                                    localStorage.setItem('agri_houses_v1', JSON.stringify(updated));
+                                                                }}
+                                                                className={`px-3 py-1 text-[10px] font-bold rounded-lg ${houseConfigs[house] === s ? 'bg-white shadow text-black' : 'text-[#86868B]'}`}
+                                                            >{s}</button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <div className="space-y-6">
+                                <h1 className="text-3xl font-bold">防除状況</h1>
+                                <div className="grid gap-3">
+                                    {aggregatedData.map(status => (
+                                        <div key={status.section} className="bg-white p-5 rounded-3xl shadow-sm border border-black/[0.02] flex items-center">
+                                            <div className={`w-1.5 h-12 rounded-full mr-4 ${status.houseStatus === '植え替え' ? 'bg-gray-200' : (status.lastRecord?.daysPassed >= 14 ? 'bg-red-500' : 'bg-green-500')}`} />
+                                            <div className="flex-1">
+                                                <div className="flex items-center gap-2">
+                                                    <span className="font-bold text-lg">{status.section}</span>
+                                                    <span className="text-[10px] font-bold text-[#86868B]">{status.houseStatus}</span>
+                                                </div>
+                                                <div className="text-[10px] text-[#86868B]">{status.lastRecord ? status.lastRecord.pesticide : '記録なし'}</div>
+                                            </div>
+                                            <div className="text-right">
+                                                <div className="text-2xl font-black">{status.lastRecord && status.houseStatus !== '植え替え' ? status.lastRecord.daysPassed : '--'}<span className="text-xs ml-0.5">日</span></div>
+                                                <div className="text-[8px] font-bold text-[#86868B] uppercase">経過</div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Sync Modal */}
+                    <AnimatePresence>
+                        {showSyncModal && (
+                            <div className="fixed inset-0 z-[100] bg-black/40 backdrop-blur-sm flex items-center justify-center p-6">
+                                <motion.div initial={{scale:0.9, opacity:0}} animate={{scale:1, opacity:1}} className="bg-white w-full max-w-sm p-8 rounded-[32px] shadow-2xl space-y-6">
+                                    <h2 className="font-bold text-xl">共有設定</h2>
+                                    <input 
+                                        type="text" 
+                                        placeholder="GAS Web App URL..." 
+                                        className="w-full bg-[#f5f5f7] p-4 rounded-xl text-sm outline-none ring-2 ring-transparent focus:ring-orange-300" 
+                                        value={syncUrl}
+                                        onChange={(e) => {
+                                            setSyncUrl(e.target.value);
+                                            localStorage.setItem('agri_sync_url', e.target.value);
+                                        }}
+                                    />
+                                    <button onClick={() => {setShowSyncModal(false); if(syncUrl) pullFromCloud();}} className="w-full bg-orange-500 text-white font-bold py-4 rounded-2xl">保存して同期</button>
+                                </motion.div>
+                            </div>
+                        )}
+                    </AnimatePresence>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
